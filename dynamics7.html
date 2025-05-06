@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order/Chaos Particle Simulation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles */
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* Prevent scrollbars */
+            background-color: #111827; /* Dark background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: #e5e7eb; /* Light text */
+        }
+        canvas {
+            display: block;
+            background-color: #000; /* Black canvas background */
+            border-radius: 8px; /* Rounded corners for the canvas */
+            box-shadow: 0 0 20px rgba(100, 150, 255, 0.3); /* Subtle glow */
+        }
+        .info-box {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background-color: rgba(0, 0, 0, 0.6);
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            max-width: 300px;
+        }
+        .info-box p {
+            margin: 0 0 5px 0;
+        }
+        .info-box strong {
+            color: #60a5fa; /* Light blue for emphasis */
+        }
+    </style>
+</head>
+<body class="bg-gray-900">
+    <canvas id="physicsCanvas"></canvas>
+    <div class="info-box">
+        <p><strong>Order/Chaos Simulation</strong></p>
+        <p>Particles interact with forces that cycle over time, shifting between structured patterns and chaotic movement.</p>
+        <p>Current Phase: <strong id="phaseDisplay">Initializing...</strong></p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('physicsCanvas');
+        const ctx = canvas.getContext('2d');
+        const phaseDisplay = document.getElementById('phaseDisplay');
+
+        // --- Simulation Parameters ---
+        let numParticles = 500; // Adjust for performance vs complexity
+        const particleSize = 1.5;
+        const maxSpeed = 1.5;
+        const interactionRadius = 80; // How far particles "see" each other
+        const damping = 0.98; // Slows particles down slightly each frame
+        const cycleDuration = 20000; // Duration of one order-chaos cycle in milliseconds
+
+        let particles = [];
+        let width, height; // Canvas dimensions
+
+        // --- Particle Class ---
+        class Particle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 2; // Random initial velocity
+                this.vy = (Math.random() - 0.5) * 2;
+                this.hue = Math.random() * 360; // Assign a base hue
+            }
+
+            // Update particle position based on velocity and apply damping
+            updatePosition() {
+                this.vx *= damping;
+                this.vy *= damping;
+
+                // Limit speed
+                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (speed > maxSpeed) {
+                    this.vx = (this.vx / speed) * maxSpeed;
+                    this.vy = (this.vy / speed) * maxSpeed;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Boundary conditions (wrap around)
+                if (this.x < 0) this.x += width;
+                if (this.x > width) this.x -= width;
+                if (this.y < 0) this.y += height;
+                if (this.y > height) this.y -= height;
+            }
+
+            // Apply forces based on interactions with other particles
+            applyForces(others, attractionForce, repulsionForce, alignmentForce) {
+                let forceX = 0;
+                let forceY = 0;
+                let avgVX = 0;
+                let avgVY = 0;
+                let neighborCount = 0;
+
+                for (const other of others) {
+                    if (other === this) continue;
+
+                    const dx = other.x - this.x;
+                    const dy = other.y - this.y;
+                    let distSq = dx * dx + dy * dy;
+
+                    // Handle wrapping boundaries for distance calculation
+                    if (Math.abs(dx) > width / 2) {
+                        distSq -= (width * Math.abs(dx)) - (width / 2)**2;
+                    }
+                     if (Math.abs(dy) > height / 2) {
+                        distSq -= (height * Math.abs(dy)) - (height / 2)**2;
+                    }
+
+                    if (distSq < interactionRadius * interactionRadius && distSq > 0.01) {
+                        const dist = Math.sqrt(distSq);
+                        const invDist = 1 / dist;
+
+                        // Repulsion (stronger at very close distances)
+                        const repel = repulsionForce * (interactionRadius - dist) * invDist * invDist;
+                        forceX -= dx * invDist * repel;
+                        forceY -= dy * invDist * repel;
+
+                        // Attraction (gentler pull towards neighbors)
+                        const attract = attractionForce * dist * invDist;
+                        forceX += dx * invDist * attract;
+                        forceY += dy * invDist * attract;
+
+                        // Alignment (try to match velocity of neighbors)
+                        avgVX += other.vx;
+                        avgVY += other.vy;
+                        neighborCount++;
+                    }
+                }
+
+                 // Apply alignment force if neighbors were found
+                if (neighborCount > 0) {
+                    avgVX /= neighborCount;
+                    avgVY /= neighborCount;
+                    forceX += (avgVX - this.vx) * alignmentForce;
+                    forceY += (avgVY - this.vy) * alignmentForce;
+                }
+
+
+                // Add a small amount of random noise/jitter
+                const noiseStrength = 0.02; // Constant small noise
+                forceX += (Math.random() - 0.5) * noiseStrength;
+                forceY += (Math.random() - 0.5) * noiseStrength;
+
+                // Update velocity based on calculated forces
+                this.vx += forceX;
+                this.vy += forceY;
+            }
+
+            // Draw the particle
+            draw(ctx, cycleProgress) {
+                 // Color based on speed and cycle progress
+                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                const lightness = 50 + Math.min(40, speed * 20); // Brighter for faster particles
+                const saturation = 70 + Math.sin(cycleProgress * Math.PI * 2) * 30; // More saturated during ordered phase
+
+                ctx.fillStyle = `hsl(${this.hue}, ${saturation}%, ${lightness}%)`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, particleSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // --- Initialization ---
+        function init() {
+            // Set canvas size to fill most of the window, maintaining aspect ratio
+            const aspectRatio = 16 / 9;
+            const padding = 40; // Padding around the canvas
+            const availableWidth = window.innerWidth - padding;
+            const availableHeight = window.innerHeight - padding;
+
+            let canvasWidth = availableWidth;
+            let canvasHeight = canvasWidth / aspectRatio;
+
+            if (canvasHeight > availableHeight) {
+                canvasHeight = availableHeight;
+                canvasWidth = canvasHeight * aspectRatio;
+            }
+
+            canvas.width = Math.floor(canvasWidth);
+            canvas.height = Math.floor(canvasHeight);
+            width = canvas.width;
+            height = canvas.height;
+
+            // Adjust particle count based on canvas size (optional)
+            // numParticles = Math.floor( (width * height) / 1500 ); // Example scaling
+
+            // Create particles
+            particles = [];
+            for (let i = 0; i < numParticles; i++) {
+                particles.push(new Particle(Math.random() * width, Math.random() * height));
+            }
+        }
+
+        // --- Animation Loop ---
+        let lastTimestamp = 0;
+        function animate(timestamp) {
+            const elapsedTime = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+
+            // --- Calculate Cyclical Parameters ---
+            const currentTime = Date.now();
+            const cycleProgress = (currentTime % cycleDuration) / cycleDuration; // Value from 0 to 1
+
+            // Use sine waves to smoothly vary forces
+            // Phase 1 (Order): High attraction, moderate alignment, low repulsion near interaction radius
+            // Phase 2 (Chaos): Low attraction, low alignment, higher repulsion/noise
+            const orderFactor = (Math.cos(cycleProgress * Math.PI * 2) + 1) / 2; // 1 during order, 0 during chaos peak
+            const chaosFactor = 1 - orderFactor; // 0 during order, 1 during chaos peak
+
+            // Define forces based on the cycle
+            // Attraction is strongest when orderFactor is high
+            const currentAttraction = 0.005 + orderFactor * 0.015;
+            // Repulsion has a base level and increases slightly in chaos phase
+            const currentRepulsion = 0.1 + chaosFactor * 0.05;
+             // Alignment is strongest during the ordered phase
+            const currentAlignment = 0.01 + orderFactor * 0.04;
+
+            // Update phase display
+             phaseDisplay.textContent = orderFactor > 0.7 ? 'Ordering...' : (chaosFactor > 0.7 ? 'Dissolving...' : 'Transitioning...');
+
+
+            // --- Update and Draw ---
+            // Semi-transparent background for fading trails effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+            ctx.fillRect(0, 0, width, height);
+
+            // Update forces and positions
+            for (const particle of particles) {
+                // Pass copies of forces so they are consistent for this frame
+                particle.applyForces(particles, currentAttraction, currentRepulsion, currentAlignment);
+            }
+             for (const particle of particles) {
+                 particle.updatePosition();
+                 particle.draw(ctx, cycleProgress);
+            }
+
+
+            requestAnimationFrame(animate);
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('resize', init); // Reinitialize on resize
+
+        // --- Start ---
+        window.onload = () => {
+            init(); // Initialize simulation
+            requestAnimationFrame(animate); // Start the animation loop
+        };
+
+    </script>
+</body>
+</html>

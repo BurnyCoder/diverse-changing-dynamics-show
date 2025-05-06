@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dynamic Nonlinear Particle Simulation</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H;
+  function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Utility: noise function
+  class PerlinNoise {
+    constructor() { this.p = new Uint8Array(512);
+      for (let i=0;i<256;i++) this.p[i]=i;
+      for (let i=0;i<256;i++){ const j = Math.floor(Math.random()*256); [this.p[i],this.p[j]]=[this.p[j],this.p[i]]; }
+      for (let i=0;i<256;i++) this.p[i+256] = this.p[i];
+    }
+    grad(hash, x, y, z) {
+      const h = hash & 15;
+      const u = h<8?x:y;
+      const v = h<4?y:(h===12||h===14?x:z);
+      return ((h&1)==0?u:-u)+((h&2)==0?v:-v);
+    }
+    fade(t) { return t*t*t*(t*(t*6-15)+10); }
+    lerp(t, a, b) { return a + t*(b-a); }
+    noise(x,y,z=0) {
+      const X = Math.floor(x)&255;
+      const Y = Math.floor(y)&255;
+      const Z = Math.floor(z)&255;
+      x-=Math.floor(x); y-=Math.floor(y); z-=Math.floor(z);
+      const u=this.fade(x), v=this.fade(y), w=this.fade(z);
+      const A = this.p[X]+Y, AA=this.p[A]+Z, AB=this.p[A+1]+Z;
+      const B = this.p[X+1]+Y, BA=this.p[B]+Z, BB=this.p[B+1]+Z;
+      return this.lerp(w,
+        this.lerp(v,
+          this.lerp(u, this.grad(this.p[AA],x,y,z), this.grad(this.p[BA],x-1,y,z)),
+          this.lerp(u, this.grad(this.p[AB],x,y-1,z), this.grad(this.p[BB],x-1,y-1,z))
+        ),
+        this.lerp(v,
+          this.lerp(u, this.grad(this.p[AA+1],x,y,z-1), this.grad(this.p[BA+1],x-1,y,z-1)),
+          this.lerp(u, this.grad(this.p[AB+1],x,y-1,z-1), this.grad(this.p[BB+1],x-1,y-1,z-1))
+        )
+      );
+    }
+  }
+  const noise = new PerlinNoise();
+
+  const N = 2000;
+  const particles = [];
+
+  class Particle {
+    constructor() {
+      this.x = Math.random()*W;
+      this.y = Math.random()*H;
+      this.vx = 0; this.vy = 0;
+      this.life = Math.random()*100;
+    }
+    update(t) {
+      // Sum of diverse forces
+      const dx = this.x - W/2;
+      const dy = this.y - H/2;
+      // Alien oscillating attractors/repulsors
+      const f1 = Math.sin(t*0.0005 + dx*0.001)*200;
+      const f2 = -Math.sin(t*0.0003 + dy*0.0015)*150;
+      const px = Math.cos(t*0.0007)*W*0.3;
+      const py = Math.sin(t*0.0009)*H*0.3;
+      const dpx = px - this.x;
+      const dpy = py - this.y;
+      const a1 = f1 * dx / (dx*dx+dy*dy+10000);
+      const a2 = f2 * dy / (dx*dx+dy*dy+10000);
+      const a3 = (dpx)*0.00005;
+      const a4 = (dpy)*0.00005;
+      // Noise-based swirl
+      const n = noise.noise(this.x*0.002, this.y*0.002, t*0.0004);
+      const angle = n * Math.PI*4;
+      const a5 = Math.cos(angle)*0.05;
+      const a6 = Math.sin(angle)*0.05;
+      // Composite acceleration
+      this.vx += a1 + a3 + a5;
+      this.vy += a2 + a4 + a6;
+      // Dissolution force
+      const dissolve = Math.sin(t*0.0002 + this.life*0.01)*0.01;
+      this.vx += dissolve*(Math.random()-0.5);
+      this.vy += dissolve*(Math.random()-0.5);
+      // Update
+      this.x += this.vx;
+      this.y += this.vy;
+      // Wrap
+      if(this.x<0) this.x+=W;
+      if(this.x>W) this.x-=W;
+      if(this.y<0) this.y+=H;
+      if(this.y>H) this.y-=H;
+      // Friction
+      this.vx *= 0.99;
+      this.vy *= 0.99;
+    }
+  }
+
+  for(let i=0;i<N;i++) particles.push(new Particle());
+
+  function draw(t) {
+    ctx.fillStyle = 'rgba(0,0,0,0.1)'; ctx.fillRect(0,0,W,H);
+    ctx.beginPath();
+    for(const p of particles) {
+      p.update(t);
+      // Color oscillates by life & noise
+      const c = 128 + 127*Math.sin(p.life*0.1 + t*0.0003);
+      ctx.fillStyle = `rgba(${c},${255-c},${c*0.5},0.6)`;
+      ctx.fillRect(p.x, p.y, 1.5, 1.5);
+      p.life += 0.1;
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>
+</body>
+</html>

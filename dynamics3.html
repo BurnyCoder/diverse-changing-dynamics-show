@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<title>Alien Chaotic Particle Playground</title>
+<style>
+ html,body{margin:0;height:100%;overflow:hidden;background:#000;}
+ canvas{display:block;width:100%;height:100%;}
+</style>
+</head>
+<body>
+<canvas id='scene'></canvas>
+<script>
+const TWO_PI = Math.PI*2;
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+let W,H,particles,forces;
+const N_PARTICLES = 600;
+const DT = 0.016;
+const FRICTION = 0.99;
+const EPOCH = 8000; // ms between force regenerations
+let lastEpoch = 0;
+function resize(){
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize',resize);
+resize();
+class Particle{
+  constructor(){
+    this.x = Math.random()*W;
+    this.y = Math.random()*H;
+    this.vx = (Math.random()-0.5)*50;
+    this.vy = (Math.random()-0.5)*50;
+  }
+  update(t){
+    let ax=0, ay=0;
+    for(const f of forces){
+      const v = f(this,t);
+      ax += v.x;
+      ay += v.y;
+    }
+    // jitter to avoid stagnation
+    ax += (Math.random()-0.5)*5;
+    ay += (Math.random()-0.5)*5;
+    this.vx += ax*DT;
+    this.vy += ay*DT;
+    this.vx *= FRICTION;
+    this.vy *= FRICTION;
+    this.x += this.vx*DT;
+    this.y += this.vy*DT;
+    // wrap
+    if(this.x < 0) this.x += W;
+    if(this.x > W) this.x -= W;
+    if(this.y < 0) this.y += H;
+    if(this.y > H) this.y -= H;
+  }
+  draw(t){
+    const speed = Math.hypot(this.vx,this.vy);
+    const hue = (t*0.02 + speed*10)%360;
+    ctx.fillStyle = `hsl(${hue},100%,60%)`;
+    ctx.beginPath();
+    ctx.arc(this.x,this.y,1.5,0,TWO_PI);
+    ctx.fill();
+  }
+}
+function rand(min,max){ return Math.random()*(max-min)+min; }
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function createRandomForce(){
+  const type = pick(['swirl','radial','field','shear']);
+  const ampBase = rand(50,200);
+  const ampFreq = rand(0.1,1);
+  const phase = rand(0,TWO_PI);
+  switch(type){
+    case 'swirl':{
+      const cx0 = rand(0,W);
+      const cy0 = rand(0,H);
+      const cxAmp = rand(0.2,0.4)*W;
+      const cyAmp = rand(0.2,0.4)*H;
+      const cxFreq = rand(0.05,0.3);
+      const cyFreq = rand(0.05,0.3);
+      const scale = rand(0.2,1);
+      return (p,t)=>{
+        const amp = ampBase*Math.sin(t*ampFreq+phase);
+        const cx = cx0 + cxAmp*Math.sin(t*cxFreq);
+        const cy = cy0 + cyAmp*Math.cos(t*cyFreq);
+        const dx = cx - p.x;
+        const dy = cy - p.y;
+        const dist = Math.hypot(dx,dy)+0.001;
+        const perpX = -dy/dist;
+        const perpY = dx/dist;
+        const s = amp/(dist*scale);
+        return {x: perpX*s, y: perpY*s};
+      };
+    }
+    case 'radial':{
+      const cx0 = rand(0,W);
+      const cy0 = rand(0,H);
+      const cxAmp = rand(0.3,0.5)*W;
+      const cyAmp = rand(0.3,0.5)*H;
+      const cxFreq = rand(0.03,0.2);
+      const cyFreq = rand(0.03,0.2);
+      const signFlip = Math.random()<0.5 ? -1 : 1;
+      return (p,t)=>{
+        const amp = ampBase*Math.sin(t*ampFreq+phase)*signFlip;
+        const cx = cx0 + cxAmp*Math.cos(t*cxFreq+phase);
+        const cy = cy0 + cyAmp*Math.sin(t*cyFreq+phase);
+        const dx = cx - p.x;
+        const dy = cy - p.y;
+        const dist = Math.hypot(dx,dy)+0.001;
+        const s = amp/(dist*0.5);
+        return {x: dx/dist*s, y: dy/dist*s};
+      };
+    }
+    case 'field':{
+      const kx = rand(0.002,0.01);
+      const ky = rand(0.002,0.01);
+      const phase2 = rand(0,TWO_PI);
+      return (p,t)=>{
+        const amp = ampBase*Math.sin(t*ampFreq+phase);
+        return {
+          x: amp*Math.sin(p.y*kx + t*ampFreq + phase),
+          y: amp*Math.cos(p.x*ky + t*ampFreq + phase2)
+        };
+      };
+    }
+    case 'shear':{
+      const dir = Math.random()<0.5 ? 1 : -1;
+      return (p,t)=>{
+        const amp = ampBase*Math.sin(t*ampFreq+phase);
+        return {
+          x: dir*amp*(p.y-H/2)/H,
+          y: -dir*amp*(p.x-W/2)/W
+        };
+      };
+    }
+  }
+}
+function regenerateForces(t){
+  forces = [];
+  const count = Math.floor(rand(6,10));
+  for(let i=0;i<count;i++){
+    forces.push(createRandomForce());
+  }
+  lastEpoch = t;
+}
+function init(){
+  particles = [];
+  for(let i=0;i<N_PARTICLES;i++){
+    particles.push(new Particle());
+  }
+  forces = [];
+  regenerateForces(0);
+  requestAnimationFrame(loop);
+}
+function loop(timestamp){
+  const t = timestamp/1000; // seconds
+  if(timestamp - lastEpoch > EPOCH){
+    regenerateForces(timestamp);
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  ctx.fillRect(0,0,W,H);
+  for(const p of particles){
+    p.update(t);
+    p.draw(t);
+  }
+  requestAnimationFrame(loop);
+}
+init();
+</script>
+</body>
+</html>

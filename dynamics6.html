@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Complex Particle Dynamics</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Prevent scrollbars */
+            background-color: #000; /* Dark background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Inter', sans-serif; /* Consistent font */
+        }
+        canvas {
+            display: block;
+            /* Make canvas responsive, but maintain aspect ratio if needed */
+            max-width: 100%;
+            max-height: 100vh;
+            border-radius: 8px; /* Slightly rounded corners for the canvas */
+             box-shadow: 0 0 20px rgba(100, 200, 255, 0.5); /* Add a subtle glow */
+        }
+        /* Add Inter font */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+    </style>
+</head>
+<body>
+    <canvas id="particleCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let particles = [];
+        const numParticles = 400; // More particles for complexity
+        let width, height;
+        let time = 0; // Time variable for oscillations
+
+        // --- Particle Class ---
+        class Particle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                // Start with some initial random velocity
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.radius = Math.random() * 2 + 1; // Varying sizes
+                // Assign a color based on position initially (can change later)
+                this.hue = (this.x / width * 180 + this.y / height * 180) % 360;
+                this.alpha = 0.8; // Slightly transparent
+                this.maxSpeed = 3; // Limit particle speed
+            }
+
+            // Apply forces and update position
+            update(deltaTime) {
+                // --- Complex Forces Calculation ---
+                let fx = 0;
+                let fy = 0;
+
+                // 1. Oscillating Central Gravity/Anti-Gravity
+                const centerForceStrength = Math.sin(time * 0.0005) * 0.05; // Oscillates between attractive and repulsive
+                const dxCenter = width / 2 - this.x;
+                const dyCenter = height / 2 - this.y;
+                const distCenterSq = dxCenter * dxCenter + dyCenter * dyCenter + 1; // Add 1 to avoid division by zero
+                const centerForce = centerForceStrength / distCenterSq; // Weaker with distance squared
+                fx += dxCenter * centerForce;
+                fy += dyCenter * centerForce;
+
+                // 2. Global Swirling Force (Oscillating Direction & Strength)
+                const swirlStrength = 0.02 + Math.sin(time * 0.0003 + this.x * 0.01) * 0.015; // Varies with time and position
+                const swirlAngle = time * 0.0002 + (this.x + this.y) * 0.005; // Angle changes with time and position
+                fx += Math.cos(swirlAngle + Math.PI / 2) * swirlStrength; // Perpendicular to radius for swirl
+                fy += Math.sin(swirlAngle + Math.PI / 2) * swirlStrength;
+
+                // 3. Local Interaction Force (Repulsion/Attraction) - More complex
+                particles.forEach(other => {
+                    if (other === this) return;
+                    const dx = other.x - this.x;
+                    const dy = other.y - this.y;
+                    const distSq = dx * dx + dy * dy;
+                    const minDist = 50; // Increased minimum distance for more spread
+
+                    if (distSq < minDist * minDist && distSq > 1) { // Only interact if close enough but not overlapping
+                        const dist = Math.sqrt(distSq);
+                        // Force oscillates between repulsion and attraction based on time and distance
+                        const interactionStrength = (Math.cos(time * 0.0008 + dist * 0.05) * 0.5 + 0.5) * 0.1 - 0.05; // Ranges roughly -0.05 to +0.05
+                        const force = interactionStrength / dist; // Force depends on distance
+
+                        fx -= dx * force; // Apply force along the line connecting particles
+                        fy -= dy * force;
+                    }
+                });
+
+                 // 4. "Alien" Nonlinear Force Field (using sine waves based on position)
+                 const alienFreqX = 0.01 + Math.sin(time * 0.00015) * 0.005;
+                 const alienFreqY = 0.01 + Math.cos(time * 0.0001) * 0.005;
+                 const alienStrength = 0.03 + Math.sin(time * 0.0004) * 0.02;
+                 fx += Math.sin(this.y * alienFreqY + time * 0.001) * alienStrength;
+                 fy += Math.cos(this.x * alienFreqX + time * 0.001) * alienStrength;
+
+                // 5. Structure Dissolving Force (Push away from dense areas - simplified)
+                // This is hard to do accurately without complex density calculations.
+                // Let's simulate it with a force pushing away from the center when central force is attractive.
+                if (centerForceStrength > 0) { // If central force is attractive
+                    const dissolveStrength = centerForceStrength * 0.5 * (1 - Math.min(1, Math.sqrt(distCenterSq) / (width * 0.3))); // Stronger near center
+                     if (distCenterSq > 1) {
+                        fx -= (dxCenter / Math.sqrt(distCenterSq)) * dissolveStrength;
+                        fy -= (dyCenter / Math.sqrt(distCenterSq)) * dissolveStrength;
+                    }
+                }
+
+                // Apply forces to velocity
+                this.vx += fx * deltaTime;
+                this.vy += fy * deltaTime;
+
+                // Add Damping / Friction
+                this.vx *= 0.98;
+                this.vy *= 0.98;
+
+                // Limit speed
+                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (speed > this.maxSpeed) {
+                    this.vx = (this.vx / speed) * this.maxSpeed;
+                    this.vy = (this.vy / speed) * this.maxSpeed;
+                }
+
+                // Update position
+                this.x += this.vx * deltaTime;
+                this.y += this.vy * deltaTime;
+
+                // Boundary Conditions (Wrap around edges)
+                if (this.x < 0) this.x = width;
+                if (this.x > width) this.x = 0;
+                if (this.y < 0) this.y = height;
+                if (this.y > height) this.y = 0;
+
+                // Update color slightly based on velocity magnitude
+                this.hue = (this.hue + speed * 0.1) % 360;
+            }
+
+            // Draw the particle
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = `hsla(${this.hue}, 80%, 60%, ${this.alpha})`;
+                ctx.fill();
+            }
+        }
+
+        // --- Initialization ---
+        function init() {
+            // Set canvas size dynamically
+            width = canvas.width = window.innerWidth * 0.9; // Use 90% of viewport width
+            height = canvas.height = window.innerHeight * 0.9; // Use 90% of viewport height
+
+            particles = []; // Clear existing particles
+            for (let i = 0; i < numParticles; i++) {
+                // Distribute particles more towards the center initially
+                const radius = Math.random() * Math.min(width, height) * 0.3;
+                const angle = Math.random() * Math.PI * 2;
+                const x = width / 2 + Math.cos(angle) * radius;
+                const y = height / 2 + Math.sin(angle) * radius;
+                particles.push(new Particle(x, y));
+            }
+            time = 0; // Reset time
+        }
+
+        // --- Animation Loop ---
+        let lastTime = 0;
+        function animate(currentTime) {
+            const deltaTime = (currentTime - lastTime) || 16.67; // Time since last frame in ms, default to ~60fps
+            lastTime = currentTime;
+
+            time += deltaTime; // Increment global time
+
+            // Clear canvas with a semi-transparent background for trails effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.fillRect(0, 0, width, height);
+
+            // Update and draw all particles
+            particles.forEach(p => {
+                // Pass a scaled deltaTime (e.g., aiming for updates based on 60fps)
+                p.update(deltaTime / 16.67);
+                p.draw(ctx);
+            });
+
+            requestAnimationFrame(animate); // Loop the animation
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('resize', init); // Re-initialize on resize
+
+        // --- Start ---
+        init(); // Initial setup
+        animate(0); // Start the animation loop
+    </script>
+</body>
+</html>

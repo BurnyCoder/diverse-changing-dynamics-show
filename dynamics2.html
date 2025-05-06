@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Infinite Nonlinear Chaotic Simulation</title>
+  <style>
+    body, html { margin: 0; padding: 0; overflow: hidden; background: #000; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <script>
+    // Simplex noise implementation (by Stefan Gustavson)
+    class SimplexNoise {
+      constructor(r = Math) { this.p = new Uint8Array(256); for (let i = 0; i < 256; i++) this.p[i] = i; let n, q; for (let i = 255; i > 0; i--) { n = Math.floor((i + 1) * r.random()); q = this.p[i]; this.p[i] = this.p[n]; this.p[n] = q; } this.perm = new Uint8Array(512); this.permMod12 = new Uint8Array(512); for (let i = 0; i < 512; i++) { this.perm[i] = this.p[i & 255]; this.permMod12[i] = this.perm[i] % 12; } }
+      noise2D(x, y) {
+        const grad3 = new Float32Array([1,1, -1,1, 1,-1, -1,-1, 1,0, -1,0, 1,0, -1,0, 0,1, 0,-1, 0,1, 0,-1]);
+        let n0=0, n1=0, n2=0;
+        const F2 = 0.5*(Math.sqrt(3)-1), G2 = (3-Math.sqrt(3))/6;
+        let s = (x+y)*F2, i = Math.floor(x+s), j = Math.floor(y+s);
+        let t = (i+j)*G2, X0 = i-t, Y0 = j-t, x0 = x-X0, y0 = y-Y0;
+        let i1= x0>y0?1:0, j1= x0>y0?0:1;
+        let x1=x0-i1+G2, y1=y0-j1+G2, x2=x0-1+2*G2, y2=y0-1+2*G2;
+        i &= 255; j &= 255;
+        let gi0 = this.permMod12[i+this.perm[j]]*2;
+        let gi1 = this.permMod12[i+i1+this.perm[j+j1]]*2;
+        let gi2 = this.permMod12[i+1+this.perm[j+1]]*2;
+        let t0 = 0.5 - x0*x0 - y0*y0;
+        if(t0>=0){ t0*=t0; n0 = t0*t0*(grad3[gi0]*x0 + grad3[gi0+1]*y0); }
+        let t1 = 0.5 - x1*x1 - y1*y1;
+        if(t1>=0){ t1*=t1; n1 = t1*t1*(grad3[gi1]*x1 + grad3[gi1+1]*y1); }
+        let t2 = 0.5 - x2*x2 - y2*y2;
+        if(t2>=0){ t2*=t2; n2 = t2*t2*(grad3[gi2]*x2 + grad3[gi2+1]*y2); }
+        return 70 * (n0 + n1 + n2);
+      }
+    }
+
+    // Setup
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+    function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const noise = new SimplexNoise();
+    const numParticles = 2000;
+    const particles = [];
+
+    // Create particles
+    for (let i = 0; i < numParticles; i++) {
+      particles.push({ x: Math.random() * W, y: Math.random() * H, vx: 0, vy: 0, mass: Math.random() * 2 + 0.5 });
+    }
+
+    let t = 0;
+    const phaseCount = 5;
+    const cycleLength = Math.PI * 4; // full cycle duration in t-units
+
+    function animate() {
+      t += 0.005;
+      ctx.globalAlpha = 0.1;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 0.8;
+
+      // Determine current force phase
+      let phase = Math.floor(((t % cycleLength) / cycleLength) * phaseCount);
+
+      for (let p of particles) {
+        let fx = 0, fy = 0;
+        let cx = W/2, cy = H/2;
+
+        switch (phase) {
+          case 0:
+            // Rotating vortex force
+            let dx = p.x - cx, dy = p.y - cy;
+            let dist = Math.hypot(dx, dy) + 0.0001;
+            let vortexStrength = Math.sin(t*0.7) * 200;
+            fx += -vortexStrength * dy / dist;
+            fy += vortexStrength * dx / dist;
+            break;
+
+          case 1:
+            // Oscillating radial attractor/repeller
+            let ax = W*0.5 + Math.cos(t*1.3)*W*0.3;
+            let ay = H*0.5 + Math.sin(t*1.7)*H*0.3;
+            let adx = p.x - ax, ady = p.y - ay;
+            let adist = Math.hypot(adx, ady) + 0.0001;
+            let attractStrength = Math.cos(t*1.1) * 150;
+            fx += -attractStrength * adx/adist;
+            fy += -attractStrength * ady/adist;
+            break;
+
+          case 2:
+            // Perlin noise flow field
+            let angle = noise.noise2D(p.x*0.002 + t, p.y*0.002 + t) * Math.PI * 2;
+            fx += Math.cos(angle) * 50;
+            fy += Math.sin(angle) * 50;
+            break;
+
+          case 3:
+            // Alien pulsating repellers
+            for (let k = 0; k < 3; k++) {
+              let px = W*(0.2 + 0.6*((k+1)/4)) + Math.sin(t*(0.5+k*0.3))*W*0.1;
+              let py = H*(0.2 + 0.6*((3-k)/4)) + Math.cos(t*(0.4+k*0.5))*H*0.1;
+              let dxk = p.x - px, dyk = p.y - py;
+              let dk = Math.hypot(dxk, dyk) + 0.0001;
+              let repStr = Math.sin(t*(1+k*0.6)) * 300;
+              fx += repStr * dxk/(dk*dk);
+              fy += repStr * dyk/(dk*dk);
+            }
+            break;
+
+          case 4:
+            // Oscillating spring to center
+            let springK = 0.01 + 0.005 * Math.sin(t*2.3);
+            fx += -springK * (p.x - cx);
+            fy += -springK * (p.y - cy);
+            break;
+        }
+
+        // update velocity & position
+        p.vx = (p.vx + fx/p.mass * 0.016) * 0.98;
+        p.vy = (p.vy + fy/p.mass * 0.016) * 0.98;
+        p.x += p.vx;
+        p.y += p.vy;
+
+        // wrap around
+        if (p.x < 0) p.x += W;
+        if (p.x > W) p.x -= W;
+        if (p.y < 0) p.y += H;
+        if (p.y > H) p.y -= H;
+
+        // draw particle
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.2, 0, Math.PI*2);
+        ctx.fillStyle = 'hsl(' + ((p.x/W*360 + t*40)%360) + ', 80%, 60%)';
+        ctx.fill();
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+</body>
+</html>
