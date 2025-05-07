@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Nonlinear Physics Simulation</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            background-color: #0a0a0a;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0,0,0,0.75); /* Slightly more opaque */
+            padding: 12px; /* Increased padding */
+            border-radius: 8px;
+            font-size: 0.9em;
+            display: flex;
+            flex-direction: column;
+            gap: 8px; /* Increased gap */
+            max-width: 300px; /* Prevent controls from becoming too wide */
+        }
+        #controls p, #controls div {
+            margin: 0;
+        }
+        #controls label {
+            margin-right: 5px;
+            font-weight: bold;
+        }
+        #controls input[type="range"] {
+            width: 150px;
+            vertical-align: middle;
+        }
+        #speedValue, #particleCountValue {
+            min-width: 45px; /* Adjusted width */
+            display: inline-block;
+            text-align: right;
+            background-color: rgba(255,255,255,0.1);
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+        #currentModeDisplay {
+            font-weight: bold;
+            color: cyan; /* Corrected CSS color value */
+        }
+        /* Style for the new button */
+        #skipModeButton {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 6px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color 0.3s ease;
+        }
+        #skipModeButton:hover {
+            background-color: #0056b3;
+        }
+        #skipModeButton:active {
+            background-color: #004085;
+        }
+
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="controls">
+        <p>Mode(s): <span id="currentModeDisplay">Initializing...</span></p>
+        <p>Time Left: <span id="timeInModeDisplay">0</span>s</p>
+        <div>
+            <label for="speedSlider">Time Speed:</label>
+            <input type="range" id="speedSlider" min="0.05" max="2.0" step="0.01" value="0.2">
+            <span id="speedValue">0.20x</span>
+        </div>
+        <div>
+            <label for="particleSlider">Particles:</label>
+            <input type="range" id="particleSlider" min="50" max="700" step="10" value="350">
+            <span id="particleCountValue">350</span>
+        </div>
+        <button id="skipModeButton">Skip Mode</button> </div>
+    <canvas id="simulationCanvas"></canvas>
+
+    <script>
+        // Get the canvas and context
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // UI Elements
+        const currentModeDisplay = document.getElementById('currentModeDisplay');
+        const timeInModeDisplay = document.getElementById('timeInModeDisplay');
+        const speedSlider = document.getElementById('speedSlider');
+        const speedValueDisplay = document.getElementById('speedValue');
+        const particleSlider = document.getElementById('particleSlider');
+        const particleCountValue = document.getElementById('particleCountValue');
+        const skipModeButton = document.getElementById('skipModeButton'); 
+
+        // Simulation parameters
+        let numParticles = 350;
+        const particleRadius = 2;
+        const particleSpeedLimit = 3.5; 
+        const damping = 0.97;
+        let timeScaleFactor = 0.2;
+
+        let particles = [];
+        let simulationTime = 0;
+        let lastTimestamp = 0;
+        let deltaTime = 0;
+
+        // Mode management
+        let activeForceModes = []; 
+        let currentModeDuration = 0;
+        let timeInCurrentMode = 0;
+        const minModeDuration = 8000; 
+        const maxModeDuration = 20000; 
+        
+        // Nebula Collapse & Jets state variables
+        let nebulaState = {
+            isCollapsing: false,
+            collapsePointX: 0,
+            collapsePointY: 0,
+            timeToJet: 0,
+            jettingTime: 0,
+            jetAngle: 0
+        };
+
+
+        // --- Particle Class ---
+        class Particle {
+            constructor(x, y) {
+                this.x = x; this.y = y;
+                this.vx = (Math.random() - 0.5) * 2; this.vy = (Math.random() - 0.5) * 2;
+                this.baseHue = Math.random() * 360;
+                this.history = []; this.maxHistoryLength = 45; // Increased history for Chrono-Echoes
+                this.isJetting = false; // For Nebula Collapse & Jets
+            }
+            update(dt) {
+                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (speed > particleSpeedLimit) {
+                    this.vx = (this.vx / speed) * particleSpeedLimit;
+                    this.vy = (this.vy / speed) * particleSpeedLimit;
+                }
+                this.x += this.vx * dt * timeScaleFactor; this.y += this.vy * dt * timeScaleFactor;
+                this.vx *= damping; this.vy *= damping;
+                
+                // Manage history: ensure it's always an array of objects {x, y}
+                if (this.history.length === 0 || (this.history[0].x !== this.x || this.history[0].y !== this.y)) {
+                    this.history.unshift({ x: this.x, y: this.y });
+                }
+                if (this.history.length > this.maxHistoryLength) this.history.pop();
+
+                if (this.x < 0) this.x += canvas.width; if (this.x > canvas.width) this.x -= canvas.width;
+                if (this.y < 0) this.y += canvas.height; if (this.y > canvas.height) this.y -= canvas.height;
+            }
+            draw(ctx) {
+                const speed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+                const lightness = 50 + Math.min(50, speed * 12); 
+                ctx.fillStyle = `hsl(${this.baseHue}, 100%, ${lightness}%)`;
+                ctx.beginPath(); ctx.arc(this.x, this.y, particleRadius, 0, Math.PI * 2); ctx.fill();
+            }
+            applyForce(fx, fy) { this.vx += fx; this.vy += fy; }
+        }
+
+        // --- Force Mode Definitions ---
+
+        function applyCosmicWebWeaver(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const numAttractors = 3 + Math.floor(Math.sin(t * 0.00005) * 2); 
+            const baseStrength = 0.005 + Math.sin(t * 0.0001) * 0.002; 
+            for (let i = 0; i < numAttractors; i++) {
+                const attractorX = (Math.sin(t * 0.00002 * (i + 1) + i) * 0.4 + 0.5) * canvas.width;
+                const attractorY = (Math.cos(t * 0.000025 * (i + 1) + i * 2) * 0.4 + 0.5) * canvas.height;
+                const dx = attractorX - particle.x; const dy = attractorY - particle.y;
+                const distSq = dx * dx + dy * dy + 100; const dist = Math.sqrt(distSq); 
+                const strength = baseStrength * (1 - dist / Math.min(canvas.width, canvas.height)); 
+                if (dist > 10) { fx += (dx / dist) * strength; fy += (dy / dist) * strength; } 
+            }
+            for (const other of particles) {
+                if (other === particle) continue;
+                const dx = particle.x - other.x; const dy = particle.y - other.y;
+                const distSq = dx * dx + dy * dy;
+                if (distSq < 100 && distSq > 0.1) { 
+                    const dist = Math.sqrt(distSq);
+                    fx += (dx / dist) * 0.05 / dist; fy += (dy / dist) * 0.05 / dist; 
+                }
+            }
+            return { fx, fy };
+        }
+
+        function applyQuantumFoam(particle, t, modeT, isDissolution = false) {
+            let fx = 0, fy = 0;
+            const jitterStrength = isDissolution ? 0.15 : 0.05; 
+            fx += (Math.random() - 0.5) * jitterStrength; fy += (Math.random() - 0.5) * jitterStrength; 
+            const numMicroEvents = 5; 
+            const eventStrengthBase = isDissolution ? 0.08 : 0.04; 
+            for (let i = 0; i < numMicroEvents; i++) {
+                const eventX = (Math.sin(particle.x * 0.1 + t * 0.001 * (i + 1) + i) * 0.5 + 0.5) * canvas.width;
+                const eventY = (Math.cos(particle.y * 0.1 + t * 0.001 * (i + 1) + i * 1.5) * 0.5 + 0.5) * canvas.height;
+                const dx = eventX - particle.x; const dy = eventY - particle.y;
+                const distSq = dx * dx + dy * dy + 1; 
+                const strength = (Math.sin(t * 0.005 + i) * eventStrengthBase) / distSq; 
+                fx += dx * strength; fy += dy * strength;
+            }
+            return { fx, fy };
+        }
+        
+        function applyRapidDissolution(particle, t, modeT) { 
+            return applyQuantumFoam(particle, t, modeT, true);
+        }
+
+        function applyCelestialBallet(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const numVortices = 2 + Math.floor((Math.sin(t * 0.00003) + 1) * 1.5); 
+            const baseVortexStrength = 0.008 + Math.sin(t * 0.0002) * 0.004; 
+            for (let i = 0; i < numVortices; i++) {
+                const vortexX = (Math.sin(t * 0.00004 * (i + 1) + i * Math.PI/2) * 0.3 + 0.5) * canvas.width;
+                const vortexY = (Math.cos(t * 0.000035 * (i + 1) + i * Math.PI/1.5) * 0.3 + 0.5) * canvas.height;
+                const dx = particle.x - vortexX; const dy = particle.y - vortexY;
+                const dist = Math.sqrt(dx * dx + dy * dy) + 10; 
+                const strength = baseVortexStrength * (1 - dist / (Math.max(canvas.width, canvas.height)*0.6)); 
+                fx += (-dy / dist) * strength * Math.cos(t*0.0001 + i);
+                fy += (dx / dist) * strength * Math.cos(t*0.0001 + i);
+                const radialStrength = strength * 0.3 * Math.sin(t * 0.00015 + i);
+                fx -= (dx / dist) * radialStrength; fy -= (dy / dist) * radialStrength;
+            }
+            let avgVX = 0, avgVY = 0, neighbors = 0;
+            for (const other of particles) {
+                if (other === particle) continue;
+                const dx = particle.x - other.x; const dy = particle.y - other.y;
+                const distSq = dx*dx + dy*dy;
+                if (distSq < 4000 && distSq > 0) { 
+                    avgVX += other.vx; avgVY += other.vy; neighbors++;
+                }
+            }
+            if (neighbors > 0) {
+                avgVX /= neighbors; avgVY /= neighbors; 
+                fx += (avgVX - particle.vx) * 0.005; fy += (avgVY - particle.vy) * 0.005; 
+            }
+            return { fx, fy };
+        }
+
+        function applyPhaseTransition(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const densityRadius = 50; let localDensity = 0;
+            for (const other of particles) {
+                if (other === particle) continue;
+                const dx = particle.x - other.x; const dy = particle.y - other.y;
+                const distSq = dx * dx + dy * dy;
+                if (distSq < densityRadius * densityRadius) localDensity++;
+            }
+            const densityThreshold = 5 + Math.sin(t * 0.0003) * 3; 
+            const interactionStrength = 0.02 + Math.sin(t * 0.0005) * 0.01; 
+            if (localDensity > densityThreshold) {
+                for (const other of particles) { 
+                    if (other === particle) continue;
+                    const dx = particle.x - other.x; const dy = particle.y - other.y;
+                    const distSq = dx*dx + dy*dy;
+                    if (distSq < densityRadius*densityRadius && distSq > 0.1) {
+                        const dist = Math.sqrt(distSq);
+                        fx += (dx/dist) * interactionStrength / (dist * 0.1 + 1);
+                        fy += (dy/dist) * interactionStrength / (dist * 0.1 + 1);
+                    }
+                }
+            } else {
+                for (const other of particles) { 
+                    if (other === particle) continue;
+                    const dx = particle.x - other.x; const dy = particle.y - other.y;
+                    const distSq = dx*dx + dy*dy;
+                    if (distSq < densityRadius*densityRadius*4 && distSq > 0.1) { 
+                        const dist = Math.sqrt(distSq);
+                        fx -= (dx/dist) * interactionStrength * 0.3 / (dist * 0.1 + 1);
+                        fy -= (dy/dist) * interactionStrength * 0.3 / (dist * 0.1 + 1);
+                    }
+                }
+            }
+            // This mode's original "Echo force" is now part of Chrono-Echoes,
+            // but we can keep a simplified single echo here for variety if desired, or remove it.
+            // For now, let's keep it to maintain its original flavor.
+            if (particle.history.length > 10) {
+                const pastSelf = particle.history[Math.floor(Math.min(particle.history.length-1, 10 + Math.sin(t*0.0004)*8))]; 
+                if (pastSelf) { // Ensure pastSelf exists
+                    const dx = pastSelf.x - particle.x; const dy = pastSelf.y - particle.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy) + 1; 
+                    const echoStrength = 0.01 * Math.cos(t * 0.0006); 
+                    fx += (dx / dist) * echoStrength; fy += (dy / dist) * echoStrength;
+                }
+            }
+            return { fx, fy };
+        }
+
+        function applyAlienGarden(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const numPatternPoints = 4 + Math.floor((Math.sin(t * 0.00005) + 1)); 
+            const patternStrength = 0.006 + Math.sin(t * 0.00015) * 0.003; 
+            for (let i = 0; i < numPatternPoints; i++) {
+                const angleOffset = i * (Math.PI * 2 / numPatternPoints);
+                const R1 = canvas.width * (0.2 + 0.15 * Math.sin(t * 0.00003 + angleOffset));
+                const R2 = canvas.height * (0.2 + 0.15 * Math.cos(t * 0.000035 + angleOffset));
+                const freq1 = 2 + Math.sin(t * 0.00002); const freq2 = 3 + Math.cos(t * 0.000025);
+                const targetX = canvas.width/2 + R1 * Math.sin(freq1 * modeT * 0.0001 + angleOffset + Math.cos(t*0.00001*i));
+                const targetY = canvas.height/2 + R2 * Math.cos(freq2 * modeT * 0.0001 + angleOffset + Math.sin(t*0.00001*i));
+                const dx = targetX - particle.x; const dy = targetY - particle.y;
+                const distSq = dx * dx + dy * dy + 100; const dist = Math.sqrt(distSq); 
+                const currentStrength = patternStrength * Math.sin(t * 0.0002 + i * Math.PI / 3); 
+                if (dist > 5) { fx += (dx / dist) * currentStrength; fy += (dy / dist) * currentStrength; }
+            }
+            const noiseScale = 0.005; const noiseSpeed = 0.00005; 
+            const angle = Math.sin(particle.x * noiseScale + t * noiseSpeed) * Math.PI + Math.cos(particle.y * noiseScale + t * noiseSpeed) * Math.PI; 
+            const flowStrength = 0.002 + Math.sin(t * 0.0001) * 0.001; 
+            fx += Math.cos(angle) * flowStrength; fy += Math.sin(angle) * flowStrength;
+            return { fx, fy };
+        }
+
+        function applyPulsarBeacon(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const numBeacons = 1 + Math.floor((Math.sin(t * 0.00002) + 1) * 0.5); 
+            const pulseFrequency = 0.0005 + Math.sin(t * 0.00003) * 0.0002; 
+            const waveSpeed = 0.1 + Math.sin(t * 0.00004) * 0.05; 
+            const pulseWidth = 50 + Math.sin(t * 0.00005) * 20; 
+            const pulseStrength = 0.03 + Math.sin(t * 0.00006) * 0.015; 
+
+            for (let i = 0; i < numBeacons; i++) {
+                const beaconX = (Math.sin(t * 0.000015 * (i + 1) + i * 2) * 0.35 + 0.5) * canvas.width;
+                const beaconY = (Math.cos(t * 0.000018 * (i + 1) + i * 2.5) * 0.35 + 0.5) * canvas.height;
+                
+                const dx = particle.x - beaconX;
+                const dy = particle.y - beaconY;
+                const distToBeacon = Math.sqrt(dx * dx + dy * dy) + 1e-5; 
+                
+                const waveFront = (modeT * waveSpeed) % (Math.max(canvas.width, canvas.height) * 0.7); 
+                
+                if (distToBeacon > waveFront - pulseWidth/2 && distToBeacon < waveFront + pulseWidth/2) {
+                    const forceDirection = Math.sin(t * pulseFrequency * (i+1)); 
+                    fx += (dx / distToBeacon) * pulseStrength * forceDirection;
+                    fy += (dy / distToBeacon) * pulseStrength * forceDirection;
+                }
+            }
+            return { fx, fy };
+        }
+
+        function applyGravitationalLensing(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const numLenses = 2 + Math.floor(Math.sin(t * 0.000025) + 1); 
+            const lensStrength = 0.05 + Math.sin(t * 0.00004) * 0.02; 
+
+            for (let i = 0; i < numLenses; i++) {
+                const lensX = (Math.cos(t * 0.00003 * (i + 1) + i * 1.5) * 0.3 + 0.5) * canvas.width;
+                const lensY = (Math.sin(t * 0.000035 * (i + 1) + i * 1.8) * 0.3 + 0.5) * canvas.height;
+
+                const dx = lensX - particle.x;
+                const dy = lensY - particle.y;
+                const distSq = dx * dx + dy * dy;
+                const dist = Math.sqrt(distSq + 100); 
+
+                if (dist > 5) { 
+                    const particleSpeed = Math.sqrt(particle.vx**2 + particle.vy**2) + 1e-5; 
+                    
+                    let attractFx = (dx / dist) * lensStrength * (100 / dist) ; 
+                    let attractFy = (dy / dist) * lensStrength * (100 / dist) ;
+
+                    let perpDx = -dy; 
+                    let perpDy = dx;  
+                    
+                    const swirlFactor = Math.sin(t * 0.0001 + i) * 0.5; 
+                    
+                    fx += attractFx + (perpDx / dist) * lensStrength * swirlFactor * (particleSpeed * 0.1);
+                    fy += attractFy + (perpDy / dist) * lensStrength * swirlFactor * (particleSpeed * 0.1);
+                }
+            }
+            return { fx, fy };
+        }
+        
+        function applySwarmIntelligence(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const cohesionStrength = 0.0002 + Math.sin(t * 0.0001) * 0.0001;
+            const separationStrength = 0.06 + Math.sin(t * 0.00015) * 0.02;
+            const alignmentStrength = 0.008 + Math.sin(t * 0.0002) * 0.003;
+            
+            const perceptionRadius = 80 + Math.sin(t * 0.00005) * 30;
+            const separationRadius = 25 + Math.sin(t * 0.00006) * 10;
+
+            let avgX = 0, avgY = 0; 
+            let avgVX = 0, avgVY = 0; 
+            let separationFx = 0, separationFy = 0; 
+            let neighborCount = 0;
+
+            for (const other of particles) {
+                if (other === particle) continue;
+                const dx = other.x - particle.x;
+                const dy = other.y - particle.y;
+                const distSq = dx * dx + dy * dy;
+
+                if (distSq < perceptionRadius * perceptionRadius) { 
+                    avgX += other.x;
+                    avgY += other.y;
+                    avgVX += other.vx;
+                    avgVY += other.vy;
+                    neighborCount++;
+
+                    if (distSq < separationRadius * separationRadius && distSq > 1e-5) { 
+                        const dist = Math.sqrt(distSq);
+                        separationFx -= (dx / dist) / dist; 
+                        separationFy -= (dy / dist) / dist;
+                    }
+                }
+            }
+
+            if (neighborCount > 0) {
+                avgX /= neighborCount; avgY /= neighborCount;
+                avgVX /= neighborCount; avgVY /= neighborCount;
+
+                fx += (avgX - particle.x) * cohesionStrength;
+                fy += (avgY - particle.y) * cohesionStrength;
+
+                fx += (avgVX - particle.vx) * alignmentStrength;
+                fy += (avgVY - particle.vy) * alignmentStrength;
+            }
+
+            fx += separationFx * separationStrength;
+            fy += separationFy * separationStrength;
+            
+            const targetX = canvas.width/2 + Math.sin(t * 0.00003) * canvas.width * 0.3;
+            const targetY = canvas.height/2 + Math.cos(t * 0.000035) * canvas.height * 0.3;
+            fx += (targetX - particle.x) * cohesionStrength * 0.2; 
+            fy += (targetY - particle.y) * cohesionStrength * 0.2;
+
+            return { fx, fy };
+        }
+
+        // --- NEW ADVANCED FORCE MODES ---
+        function applyChronoEchoes(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const numEchoes = 2 + Math.floor(Math.sin(t * 0.00007) + 1); // 2 or 3 echoes
+            const baseEchoStrength = 0.008 + Math.sin(t * 0.00012) * 0.004;
+            const timeSeparation = 10 + Math.sin(t * 0.00005) * 5; // How far apart in history (steps)
+
+            if (particle.history.length > numEchoes * timeSeparation) {
+                for (let i = 0; i < numEchoes; i++) {
+                    const historyIndex = Math.floor(Math.min(particle.history.length - 1, (i + 1) * timeSeparation + Math.sin(t * 0.00008 + i) * 3));
+                    const pastSelf = particle.history[historyIndex];
+                    
+                    if (pastSelf && typeof pastSelf.x === 'number' && typeof pastSelf.y === 'number') { // Ensure pastSelf and its properties are valid
+                        const dx = pastSelf.x - particle.x;
+                        const dy = pastSelf.y - particle.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy) + 1; // Epsilon
+                        
+                        // Echo strength can oscillate between attractive and repulsive
+                        const echoStrength = baseEchoStrength * Math.cos(t * 0.00015 + i * Math.PI / numEchoes); 
+                        fx += (dx / dist) * echoStrength * (1 / (i + 1)); // Further echoes are weaker
+                        fy += (dy / dist) * echoStrength * (1 / (i + 1));
+                    }
+                }
+            }
+            return { fx, fy };
+        }
+
+        function applyCrystallineGrowth(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const gridSize = 60 + Math.sin(t * 0.00006) * 20; // Oscillating grid size
+            const alignmentStrength = 0.02 + Math.sin(t * 0.0001) * 0.01;
+            const meltingFactor = Math.max(0, Math.sin(t * 0.00015 + particle.baseHue/180*Math.PI)); // 0 to 1, makes it less rigid
+
+            // Snap to grid points
+            const targetX = Math.round(particle.x / gridSize) * gridSize;
+            const targetY = Math.round(particle.y / gridSize) * gridSize;
+
+            fx += (targetX - particle.x) * alignmentStrength * (1 - meltingFactor);
+            fy += (targetY - particle.y) * alignmentStrength * (1 - meltingFactor);
+
+            // Repulsion from nearby particles to form spaced crystals
+            for (const other of particles) {
+                if (other === particle) continue;
+                const dx = particle.x - other.x;
+                const dy = particle.y - other.y;
+                const distSq = dx * dx + dy * dy;
+                if (distSq < (gridSize * 0.8) ** 2 && distSq > 0.1) { // Repel if closer than ~grid size
+                    const dist = Math.sqrt(distSq);
+                    fx += (dx / dist) * 0.03 / dist * (1 + meltingFactor * 0.5); // Stronger repulsion when melting
+                    fy += (dy / dist) * 0.03 / dist * (1 + meltingFactor * 0.5);
+                }
+            }
+            // Add a slight rotational force around grid points for more dynamic crystals
+            const angleToTarget = Math.atan2(particle.y - targetY, particle.x - targetX);
+            const rotationalForce = 0.005 * Math.sin(t * 0.0002 + angleToTarget) * (1 - meltingFactor);
+            fx += -Math.sin(angleToTarget + Math.PI/2) * rotationalForce;
+            fy +=  Math.cos(angleToTarget + Math.PI/2) * rotationalForce;
+
+            return { fx, fy };
+        }
+        
+        function applyNebulaCollapseAndJets(particle, t, modeT) {
+            let fx = 0, fy = 0;
+            const collapseStrength = 0.0005 + Math.sin(t * 0.00003) * 0.0002;
+            const jetStrength = 0.3 + Math.sin(t*0.0001) * 0.1;
+            const jetDuration = 1500 + Math.sin(t*0.00005)*500; // ms for jetting phase
+            const timeBetweenJets = 7000 + Math.sin(t*0.00004)*2000; // ms
+
+            // Initialize or update nebula state for this mode instance
+            if (!nebulaState.isCollapsing && modeT > nebulaState.timeToJet + nebulaState.jettingTime) {
+                nebulaState.isCollapsing = true;
+                nebulaState.collapsePointX = canvas.width * (0.3 + Math.random() * 0.4);
+                nebulaState.collapsePointY = canvas.height * (0.3 + Math.random() * 0.4);
+                nebulaState.timeToJet = modeT + timeBetweenJets * (0.8 + Math.random()*0.4) ; // When next jetting starts
+                nebulaState.jettingTime = 0; // Reset jetting time
+                particle.isJetting = false; // Reset jetting state for all particles
+            }
+            
+            // Check if it's time to jet
+            if (nebulaState.isCollapsing && modeT > nebulaState.timeToJet && nebulaState.jettingTime < jetDuration) {
+                if (nebulaState.jettingTime === 0) { // First frame of jetting
+                    nebulaState.jetAngle = Math.random() * Math.PI * 2; // Choose a random jet angle
+                    // Select a subset of particles near the collapse point for jetting
+                    particles.forEach(p => {
+                        const dx = p.x - nebulaState.collapsePointX;
+                        const dy = p.y - nebulaState.collapsePointY;
+                        if (dx*dx + dy*dy < (canvas.width*0.2)**2 && Math.random() < 0.3) { // 30% of nearby particles
+                           p.isJetting = true;
+                        } else {
+                           p.isJetting = false;
+                        }
+                    });
+                }
+                nebulaState.jettingTime += deltaTime * timeScaleFactor; // Accumulate scaled time
+
+                if (particle.isJetting) {
+                    // Bipolar jets
+                    const jetDirection = (Math.random() < 0.5) ? nebulaState.jetAngle : nebulaState.jetAngle + Math.PI;
+                    fx += Math.cos(jetDirection) * jetStrength;
+                    fy += Math.sin(jetDirection) * jetStrength;
+                } else { // Particles not jetting are pushed away slightly
+                    const dx = particle.x - nebulaState.collapsePointX;
+                    const dy = particle.y - nebulaState.collapsePointY;
+                    const dist = Math.sqrt(dx*dx + dy*dy) + 1;
+                    fx += (dx/dist) * jetStrength * 0.05;
+                    fy += (dy/dist) * jetStrength * 0.05;
+                }
+
+            } else if (nebulaState.isCollapsing && nebulaState.jettingTime >= jetDuration) {
+                 // Jetting finished, reset for next collapse cycle
+                nebulaState.isCollapsing = false; 
+                nebulaState.timeToJet = modeT + 1000; // Add a small delay before next potential collapse starts
+                particles.forEach(p => p.isJetting = false);
+
+            } else if (nebulaState.isCollapsing) { // Collapsing phase
+                const dx = nebulaState.collapsePointX - particle.x;
+                const dy = nebulaState.collapsePointY - particle.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) + 1;
+                fx += (dx / dist) * collapseStrength * (1 + dist/canvas.width); // Stronger further away to gather
+                fy += (dy / dist) * collapseStrength * (1 + dist/canvas.width);
+            }
+            return { fx, fy };
+        }
+
+
+        const allForceModes = [
+            { name: "Cosmic Web", apply: applyCosmicWebWeaver },
+            { name: "Quantum Foam", apply: (p, t, mT) => applyQuantumFoam(p, t, mT, false) },
+            { name: "Celestial Ballet", apply: applyCelestialBallet },
+            { name: "Phase Transition", apply: applyPhaseTransition },
+            { name: "Alien Garden", apply: applyAlienGarden },
+            { name: "Rapid Dissolution", apply: applyRapidDissolution },
+            { name: "Pulsar Beacon", apply: applyPulsarBeacon },
+            { name: "Gravitational Lens", apply: applyGravitationalLensing },
+            { name: "Swarm Intelligence", apply: applySwarmIntelligence },
+            { name: "Chrono-Echoes", apply: applyChronoEchoes },
+            { name: "Crystalline Growth", apply: applyCrystallineGrowth },
+            { name: "Nebula Collapse & Jets", apply: applyNebulaCollapseAndJets }
+        ];
+
+        // --- Mode Switching Logic ---
+        function switchToNextMode() {
+            activeForceModes = []; 
+            let modeNames = []; 
+            const maxModesToCombine = 3; 
+
+            let availableModeIndices = [...Array(allForceModes.length).keys()]; 
+            
+            let primaryModePoolIndex = Math.floor(Math.random() * availableModeIndices.length);
+            let primaryModeActualIndex = availableModeIndices.splice(primaryModePoolIndex, 1)[0]; 
+            activeForceModes.push(allForceModes[primaryModeActualIndex]);
+            modeNames.push(allForceModes[primaryModeActualIndex].name);
+
+            // Reset Nebula state if Nebula mode is not selected or is finished
+            if (allForceModes[primaryModeActualIndex].name !== "Nebula Collapse & Jets") {
+                 nebulaState.isCollapsing = false; // Ensure it resets if not the primary mode
+                 nebulaState.jettingTime = Infinity; // Mark as done
+                 particles.forEach(p => p.isJetting = false);
+            } else { // If Nebula IS the primary, reset its internal timers for a fresh start
+                nebulaState.isCollapsing = false; 
+                nebulaState.timeToJet = 0;
+                nebulaState.jettingTime = 0;
+            }
+
+
+            let currentCombinedCount = 1;
+            const baseCombineChance = 0.6; 
+            let chanceForNextMode = baseCombineChance;
+
+            while (currentCombinedCount < maxModesToCombine && availableModeIndices.length > 0 && Math.random() < chanceForNextMode) {
+                let nextModePoolIndex = Math.floor(Math.random() * availableModeIndices.length);
+                let nextModeActualIndex = availableModeIndices.splice(nextModePoolIndex, 1)[0]; 
+                
+                // Avoid combining Nebula mode with others for now due to its complex internal state
+                if (allForceModes[nextModeActualIndex].name === "Nebula Collapse & Jets" || 
+                    activeForceModes.some(m => m.name === "Nebula Collapse & Jets")) {
+                    // If trying to add Nebula or Nebula is already active, skip adding another mode this iteration
+                    // Or, simply don't add Nebula as a secondary mode.
+                    // For simplicity, we'll just skip this potential combination if Nebula is involved.
+                } else {
+                    activeForceModes.push(allForceModes[nextModeActualIndex]);
+                    modeNames.push(allForceModes[nextModeActualIndex].name);
+                    currentCombinedCount++;
+                }
+                chanceForNextMode *= 0.7; 
+            }
+            
+            currentModeDisplay.textContent = modeNames.join(' + '); 
+            currentModeDuration = minModeDuration + Math.random() * (maxModeDuration - minModeDuration);
+            timeInCurrentMode = 0; 
+        }
+        
+        // --- Initialization ---
+        function initSimulation() {
+            canvas.width = window.innerWidth * 0.9;
+            canvas.height = window.innerHeight * 0.85; 
+            if (canvas.width > 1200) canvas.width = 1200; 
+            if (canvas.height > 800) canvas.height = 800; 
+
+            particles = []; 
+            const centerX = canvas.width / 2; const centerY = canvas.height / 2;
+            for (let i = 0; i < numParticles; i++) {
+                const angle = (i / numParticles) * Math.PI * 10;
+                const radius = Math.sqrt(i / numParticles) * Math.min(canvas.width,canvas.height) * 0.35 + 50; 
+                const x = centerX + Math.cos(angle) * radius * (0.5 + Math.random()*0.5);
+                const y = centerY + Math.sin(angle) * radius * (0.5 + Math.random()*0.5);
+                particles.push(new Particle(x, y));
+            }
+            simulationTime = 0; 
+            lastTimestamp = 0;  
+            
+            // Reset global nebula state before first mode switch
+            nebulaState = { isCollapsing: false, collapsePointX: 0, collapsePointY: 0, timeToJet: 0, jettingTime: Infinity, jetAngle: 0 };
+
+            switchToNextMode(); 
+            
+            speedSlider.value = timeScaleFactor;
+            speedValueDisplay.textContent = `${parseFloat(timeScaleFactor).toFixed(2)}x`;
+            particleSlider.value = numParticles;
+            particleCountValue.textContent = numParticles;
+        }
+
+        // --- Main Update Function ---
+        function update(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp; 
+            deltaTime = timestamp - lastTimestamp; 
+            lastTimestamp = timestamp;
+            if (deltaTime > 100) deltaTime = 100; 
+
+            const effectiveDeltaTime = deltaTime * timeScaleFactor; 
+            simulationTime += effectiveDeltaTime; 
+            timeInCurrentMode += effectiveDeltaTime; 
+
+            if (timeInCurrentMode >= currentModeDuration) {
+                switchToNextMode();
+            }
+            
+            timeInModeDisplay.textContent = ((currentModeDuration - timeInCurrentMode) / 1000).toFixed(1);
+
+            for (const particle of particles) {
+                let totalFx = 0, totalFy = 0;
+                for (const mode of activeForceModes) {
+                    const { fx: modeFx, fy: modeFy } = mode.apply(particle, simulationTime, timeInCurrentMode);
+                    totalFx += modeFx;
+                    totalFy += modeFy;
+                }
+
+                let scaleFactor = 1.0;
+                if (activeForceModes.length === 2) {
+                    scaleFactor = 0.65; 
+                } else if (activeForceModes.length >= 3) { // Adjusted for 3 or more
+                    scaleFactor = 0.50; 
+                }
+
+                if (activeForceModes.length > 1) {
+                    totalFx *= scaleFactor;
+                    totalFy *= scaleFactor;
+                }
+                particle.applyForce(totalFx, totalFy); 
+            }
+
+            for (const particle of particles) {
+                particle.update(deltaTime); 
+            }
+        }
+
+        // --- Drawing Function ---
+        function draw() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.12)'; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            for (const particle of particles) {
+                particle.draw(ctx);
+            }
+        }
+
+        // --- Animation Loop ---
+        function animate(timestamp) {
+            update(timestamp); 
+            draw();            
+            requestAnimationFrame(animate); 
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('resize', initSimulation); 
+
+        speedSlider.addEventListener('input', (event) => {
+            timeScaleFactor = parseFloat(event.target.value);
+            speedValueDisplay.textContent = `${timeScaleFactor.toFixed(2)}x`;
+        });
+
+        particleSlider.addEventListener('input', (event) => {
+            numParticles = parseInt(event.target.value);
+            particleCountValue.textContent = numParticles;
+            initSimulation(); 
+        });
+
+        skipModeButton.addEventListener('click', () => {
+            switchToNextMode(); 
+        });
+
+        // Start the simulation
+        initSimulation();
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>
